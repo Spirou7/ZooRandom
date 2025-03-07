@@ -1,62 +1,37 @@
 import requests
-import m3u8
-import cv2
+import ffmpeg
 import os
 
-# HLS .m3u8 URL (replace with your own)
-m3u8_url = "https://zssd-penguin.hls.camzonecdn.com/CamzoneStreams/zssd-penguin/Playlist.m3u8"
+# Step 1: Define the M3U8 URL
+M3U8_URL = "https://zssd-penguin.hls.camzonecdn.com/CamzoneStreams/zssd-penguin/chunklist.m3u8"  # Change this to your actual URL
 
-# Function to download the latest .ts file
-def get_latest_ts_file(m3u8_url):
-    response = requests.get(m3u8_url)
-    if response.status_code != 200:
-        print("Failed to fetch .m3u8 file")
-        return None
+# Step 2: Fetch the M3U8 playlist
+response = requests.get(M3U8_URL)
+if response.status_code != 200:
+    raise Exception("Failed to fetch M3U8 file")
 
-    # Parse the .m3u8 playlist
-    playlist = m3u8.loads(response.text)
+# Step 3: Parse the first TS segment URL
+base_url = M3U8_URL.rsplit("/", 1)[0]  # Extract base URL
+lines = response.text.splitlines()
+ts_file = next(line for line in lines if line.endswith(".ts"))  # Get first .ts file
+ts_url = f"{base_url}/{ts_file}"
 
-    # Get the last segment URL (latest one)
-    if not playlist.segments:
-        print("No segments found in the playlist")
-        return None
+# Step 4: Download the TS file
+ts_filename = "segment.ts"
+with requests.get(ts_url, stream=True) as r:
+    r.raise_for_status()
+    with open(ts_filename, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
 
-    latest_segment = playlist.segments[-1].uri  # Last segment
-    ts_url = latest_segment if latest_segment.startswith("http") else os.path.join(os.path.dirname(m3u8_url), latest_segment)
+print(f"Downloaded {ts_filename}")
 
-    print(f"Latest TS file URL: {ts_url}")
+# Step 5: Extract a frame using FFmpeg
+output_frame = "frame.jpg"
+ffmpeg.input(ts_filename).output(output_frame, vframes=1, ss=1, y=None).run()
 
-    # Download the .ts file
-    ts_response = requests.get(ts_url, stream=True)
-    if ts_response.status_code == 200:
-        with open("latest.ts", "wb") as f:
-            f.write(ts_response.content)
-        return "latest.ts"
-    else:
-        print("Failed to download .ts file")
-        return None
+print(f"Extracted frame saved as {output_frame}")
 
-# Function to extract a frame from the .ts file
-def extract_frame(ts_file, output_image="frame.jpg"):
-    cap = cv2.VideoCapture(ts_file)
-
-    if not cap.isOpened():
-        print("Error: Could not open video file")
-        return False
-
-    ret, frame = cap.read()
-    if ret:
-        cv2.imwrite(output_image, frame)
-        print(f"Frame saved as {output_image}")
-        cap.release()
-        return True
-    else:
-        print("Error: Could not read frame")
-        cap.release()
-        return False
-
-# Main script execution
-ts_file = get_latest_ts_file(m3u8_url)
-if ts_file:
-    extract_frame(ts_file)
+# Clean up
+os.remove(ts_filename)
 
